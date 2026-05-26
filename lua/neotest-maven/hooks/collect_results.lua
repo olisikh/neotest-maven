@@ -1,6 +1,5 @@
 local lib = require("neotest.lib")
 local xml = require("neotest.lib.xml")
-local get_package_name = require("neotest-maven.hooks.shared_utilities").get_package_name
 
 local XML_FILE_SUFFIX = ".xml"
 local STATUS_PASSED = "passed" --- see neotest.Result.status
@@ -108,7 +107,7 @@ end
 --- @return table - see neotest.Error
 local function parse_error_from_failure_xml(failure_node, test_case_node)
 	local type = failure_node._attr.type
-	local message = (failure_node._attr.message:gsub(type .. ".*\n", ""))
+	local message = (failure_node._attr.message:gsub(type .. ".*\n", ""):gsub("^%s+", ""))
 
 	local stack_trace = failure_node[1] or ""
 
