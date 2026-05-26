@@ -5,24 +5,26 @@ local XML_FILE_SUFFIX = ".xml"
 local STATUS_PASSED = "passed" --- see neotest.Result.status
 local STATUS_FAILED = "failed" --- see neotest.Result.status
 
+--- @param directory_path string
+--- @param report_name_suffix string | nil
+--- @return string[]
+local function list_xml_files(directory_path, report_name_suffix)
+	local xml_files = {}
+	for part in directory_path:gmatch("([^:]+)") do
+		local pattern = report_name_suffix and ("/*" .. report_name_suffix .. XML_FILE_SUFFIX) or ("/*" .. XML_FILE_SUFFIX)
+		vim.list_extend(xml_files, vim.fn.glob(part .. pattern, false, true))
+	end
+	return xml_files
+end
+
 --- Searches for all files XML files in this directory (not recursive) and
 --- parses their content as Lua tables using some Neotest utility.
 ---
 --- @param directory_path string
+--- @param report_name_suffix string | nil
 --- @return table[] - list of parsed XML tables
-local function parse_xml_files_from_directory(directory_path)
-	local xml_files = {}
-	for part in directory_path:gmatch("([^:]+)") do
-		vim.list_extend(
-			xml_files,
-			lib.files.find(part, {
-				filter_dir = function(file_name)
-					return file_name:sub(-#XML_FILE_SUFFIX) == XML_FILE_SUFFIX
-				end,
-			})
-		)
-	end
-
+local function parse_xml_files_from_directory(directory_path, report_name_suffix)
+	local xml_files = list_xml_files(directory_path, report_name_suffix)
 	return vim.tbl_map(function(file_path)
 		local content = lib.files.read(file_path)
 		if file_path:sub(-#XML_FILE_SUFFIX) == XML_FILE_SUFFIX then
@@ -45,6 +47,16 @@ local function extract_before_parenthesis(input)
 	-- Use pattern matching to find everything before the first '('
 	local result = string.match(input, "^[^%(]+")
 	return result
+end
+
+--- @param test_case_node table
+--- @param report_name_suffix string | nil
+local function strip_report_name_suffix(test_case_node, report_name_suffix)
+	if not report_name_suffix or not test_case_node._attr or not test_case_node._attr.classname then
+		return
+	end
+
+	test_case_node._attr.classname = test_case_node._attr.classname:gsub(vim.pesc(report_name_suffix) .. "$", "")
 end
 
 --- This tries to find the position in the tree that belongs to this test case
@@ -117,6 +129,12 @@ local function parse_error_from_failure_xml(failure_node, test_case_node)
 end
 
 --- @param test_case_node table
+--- @return table | nil
+local function get_failure_node(test_case_node)
+	return test_case_node.failure or test_case_node.error
+end
+
+--- @param test_case_node table
 --- @param results_directory string
 --- @return string
 local function write_systemout_to_file(test_case_node, results_directory)
@@ -157,7 +175,7 @@ local function write_output_for_parameterized_tests(test_case_node, results_dire
 	local neotest_output_files = parent_path .. "/neotest-output"
 
 	local test_number = tonumber(get_parameter_number(test_case_node))
-	local failure_node = test_case_node.failure
+	local failure_node = get_failure_node(test_case_node)
 	local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
 
 	vim.uv.fs_mkdir(neotest_output_files, tonumber("755", 8))
@@ -198,7 +216,7 @@ local function get_status_for_parameterized(test_case_node, table_tests)
 	if table_tests[test_case_node_name].status == STATUS_FAILED then
 		return STATUS_FAILED
 	else
-		local failure_node = test_case_node.failure
+		local failure_node = get_failure_node(test_case_node)
 		return failure_node == nil and STATUS_PASSED or STATUS_FAILED
 	end
 end
@@ -219,11 +237,13 @@ return function(build_specfication, _, tree)
 	local parameterized_tests = {}
 	local position = tree:data()
 	local results_directory = build_specfication.context.test_results_directory
-	local juris_reports = parse_xml_files_from_directory(results_directory)
+	local report_name_suffix = build_specfication.context.report_name_suffix
+	local juris_reports = parse_xml_files_from_directory(results_directory, report_name_suffix)
 
 	for _, juris_report in pairs(juris_reports) do
 		for _, test_suite_node in pairs(asList(juris_report.testsuite)) do
 			for _, test_case_node in pairs(asList(test_suite_node.testcase)) do
+				strip_report_name_suffix(test_case_node, report_name_suffix)
 				local is_parameterized = is_parameterized_test(test_case_node)
 				local matched_position = find_position_for_test_case(tree, test_case_node)
 
@@ -232,10 +252,7 @@ return function(build_specfication, _, tree)
 					local test_case_node_name = extract_test_case_basename(test_case_node)
 					local number = tonumber(get_parameter_number(test_case_node))
 					if number == 1 then
-						local failure_node = test_case_node.failure
-						if failure_node == nil then
-							failure_node = test_case_node.error
-						end
+						local failure_node = get_failure_node(test_case_node)
 						local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
 						parameterized_tests[test_case_node_name] = {
 							status = status,
@@ -261,10 +278,7 @@ return function(build_specfication, _, tree)
 						path_to_file = nil
 					end
 
-					local failure_node = test_case_node.failure
-					-- if failure_node == nil then
-					-- 	failure_node = test_case_node.error
-					-- end
+					local failure_node = get_failure_node(test_case_node)
 					local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
 					local short_message = (failure_node or {}).message
 					local error = failure_node and parse_error_from_failure_xml(failure_node, test_case_node)

@@ -30,10 +30,19 @@ local function get_test_results_directory(project_directory, position)
 	return project_directory .. "/target/failsafe-reports" .. ":" .. project_directory .. "/target/surefire-reports"
 end
 
+
+--- @return string
+local function build_report_name_suffix()
+	return "-neotest-" .. tostring(vim.uv.hrtime())
+end
+
 --- @param position table
+--- @param report_name_suffix string
 --- @return table
-local function build_maven_command(position)
+local function build_maven_command(position, report_name_suffix)
 	local command = { get_maven_executable(), "-f", find_project_directory(position.path) .. "/pom.xml", "" }
+	table.insert(command, "-Dmaven.test.failure.ignore=true")
+	table.insert(command, "-Dsurefire.reportNameSuffix='" .. report_name_suffix .. "'")
 	if position.type == "file" then
 		local filename = position.name
 		local classname = filename:gsub("%.java", "")
@@ -79,11 +88,13 @@ end
 --- @return nil | table | table[] - see neotest.RunSpec[]
 return function(arguments)
 	local position = arguments.tree:data()
-	local command = build_maven_command(position)
+	local report_name_suffix = build_report_name_suffix()
+	local command = build_maven_command(position, report_name_suffix)
 	local project_directory = find_project_directory(position.path)
 
 	local context = {}
 	context.test_results_directory = get_test_results_directory(project_directory, position)
+	context.report_name_suffix = report_name_suffix
 	local returnable = { command = table.concat(command, " "), context = context }
 	return returnable
 end
