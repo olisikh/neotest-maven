@@ -117,11 +117,29 @@ end
 ---
 --- @param failure_node table - XML node of failure report in of a test case
 --- @return table - see neotest.Error
-local function parse_error_from_failure_xml(failure_node, test_case_node)
-	local type = failure_node._attr.type
-	local message = (failure_node._attr.message:gsub(type .. ".*\n", ""):gsub("^%s+", ""))
-
+local function extract_message_and_stack_trace(failure_node)
+	local attrs = failure_node._attr or {}
 	local stack_trace = failure_node[1] or ""
+	local type = attrs.type or ""
+	local first_line = stack_trace:match("^([^\n]+)")
+	local message = attrs.message or first_line or type
+
+	if type ~= "" and message ~= type then
+		message = message:gsub("^" .. vim.pesc(type) .. ":?%s*", "")
+	end
+
+	message = message:gsub("^%s+", ""):gsub("%s+$", "")
+
+	if message == "" then
+		message = first_line or type
+	end
+
+	return message, stack_trace
+end
+
+local function parse_error_from_failure_xml(failure_node, test_case_node)
+	local short_message, stack_trace = extract_message_and_stack_trace(failure_node)
+	local message = stack_trace ~= "" and stack_trace or short_message
 
 	local line_number = find_first_number_after_known_string(stack_trace, test_case_node._attr.name)
 
@@ -280,7 +298,7 @@ return function(build_specfication, _, tree)
 
 					local failure_node = get_failure_node(test_case_node)
 					local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
-					local short_message = (failure_node or {}).message
+					local short_message = failure_node and extract_message_and_stack_trace(failure_node) or nil
 					local error = failure_node and parse_error_from_failure_xml(failure_node, test_case_node)
 					local result = {
 						status = status,
