@@ -1,4 +1,5 @@
 local find_project_directory = require("neotest-maven.hooks.find_project_directory")
+local logger = require("neotest-maven.logger")
 
 --- Fiends either an executable file named `gradlew` in any parent directory of
 --- the project or falls back to a binary called `gradle` that must be available
@@ -91,10 +92,21 @@ return function(arguments)
 	local report_name_suffix = build_report_name_suffix()
 	local command = build_maven_command(position, report_name_suffix)
 	local project_directory = find_project_directory(position.path)
+	if #command == 0 then
+		logger.warn(function()
+			return "Could not build Maven command for position type '" .. tostring(position.type) .. "'"
+		end)
+	end
 
 	local context = {}
 	context.test_results_directory = get_test_results_directory(project_directory, position)
 	context.report_name_suffix = report_name_suffix
 	local returnable = { command = table.concat(command, " "), context = context }
+	logger.debug(function()
+		return "Built Maven command: " .. returnable.command
+	end)
+	logger.debug(function()
+		return "Collecting reports from: " .. context.test_results_directory
+	end)
 	return returnable
 end

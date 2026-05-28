@@ -1,5 +1,6 @@
 local lib = require("neotest.lib")
 local filetype = require("plenary.filetype")
+local logger = require("neotest-maven.logger")
 local position_queries = require("neotest-maven.position_queries")
 
 --- See Neotest adapter specification.
@@ -17,6 +18,12 @@ local position_queries = require("neotest-maven.position_queries")
 return function(path)
 	local file_type = filetype.detect(path)
 	local position_query = position_queries[file_type]
+	if not position_query then
+		logger.debug(function()
+			return "Skipping position discovery for unsupported filetype '" .. tostring(file_type) .. "' at " .. path
+		end)
+		return nil
+	end
 
 	local returnable = lib.treesitter.parse_positions(path, position_query, {
 		--nested_tests = true,
@@ -24,6 +31,11 @@ return function(path)
 		build_position = 'require("neotest-maven.hooks.discover_positions.build_position")',
 		position_id = 'require("neotest-maven.hooks.discover_positions.build_position_identifier")',
 	})
+	logger.debug(function()
+		local root = returnable and returnable:data()
+		local root_name = root and root.name or path:match("([^/]+)$") or path
+		return "Discovered positions for " .. root_name
+	end)
 
 	return returnable
 end

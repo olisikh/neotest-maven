@@ -1,5 +1,6 @@
 local lib = require("neotest.lib")
 local xml = require("neotest.lib.xml")
+local logger = require("neotest-maven.logger")
 
 local XML_FILE_SUFFIX = ".xml"
 local STATUS_PASSED = "passed" --- see neotest.Result.status
@@ -25,6 +26,15 @@ end
 --- @return table[] - list of parsed XML tables
 local function parse_xml_files_from_directory(directory_path, report_name_suffix)
 	local xml_files = list_xml_files(directory_path, report_name_suffix)
+	if #xml_files == 0 then
+		local suffix_message = report_name_suffix and (" for suffix '" .. report_name_suffix .. "'") or ""
+		logger.warn("No XML test reports found in " .. directory_path .. suffix_message)
+	else
+		logger.debug(function()
+			return "Parsing " .. #xml_files .. " XML test report(s) from " .. directory_path
+		end)
+	end
+
 	return vim.tbl_map(function(file_path)
 		local content = lib.files.read(file_path)
 		if file_path:sub(-#XML_FILE_SUFFIX) == XML_FILE_SUFFIX then
@@ -168,13 +178,12 @@ local function write_systemout_to_file(test_case_node, results_directory)
 	if file then
 		file:write(test_case_node["system-out"])
 		if test_case_node.failure ~= nil then
-			print("entrou no failure")
 			file:write("\n\n")
 			file:write(test_case_node.failure[1])
 		end
 		file:close()
 	else
-		print("Error: Could not open file for writing.")
+		logger.error("Could not write test output file: " .. path_to_file)
 	end
 
 	return path_to_file
@@ -217,7 +226,7 @@ local function write_output_for_parameterized_tests(test_case_node, results_dire
 		file:write("\n\n")
 		file:close()
 	else
-		print("Error: Could not open file for writing.")
+		logger.error("Could not write parameterized test output file: " .. path_to_file)
 	end
 
 	return path_to_file
@@ -237,6 +246,17 @@ local function get_status_for_parameterized(test_case_node, table_tests)
 		local failure_node = get_failure_node(test_case_node)
 		return failure_node == nil and STATUS_PASSED or STATUS_FAILED
 	end
+end
+
+local function get_error_details(failure_node, test_case_node)
+	if not failure_node then
+		return nil, nil
+	end
+
+	local short_message = extract_message_and_stack_trace(failure_node)
+	local error = parse_error_from_failure_xml(failure_node, test_case_node)
+
+	return short_message, error
 end
 
 --- See Neotest adapter specification.
@@ -264,26 +284,27 @@ return function(build_specfication, _, tree)
 				strip_report_name_suffix(test_case_node, report_name_suffix)
 				local is_parameterized = is_parameterized_test(test_case_node)
 				local matched_position = find_position_for_test_case(tree, test_case_node)
+				local failure_node = get_failure_node(test_case_node)
 
 				if is_parameterized and matched_position ~= nil then
-					print("entrou no fluxo de parametrizado")
 					local test_case_node_name = extract_test_case_basename(test_case_node)
 					local number = tonumber(get_parameter_number(test_case_node))
+					local short_message, error = get_error_details(failure_node, test_case_node)
 					if number == 1 then
-						local failure_node = get_failure_node(test_case_node)
 						local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
 						parameterized_tests[test_case_node_name] = {
 							status = status,
 							output = write_output_for_parameterized_tests(test_case_node, results_directory),
-							short = nil,
-							errors = {},
+							short = short_message,
+							errors = error and { error } or {},
 						}
 					else
+						local existing_test = parameterized_tests[test_case_node_name]
 						parameterized_tests[test_case_node_name] = {
 							status = get_status_for_parameterized(test_case_node, parameterized_tests),
 							output = write_output_for_parameterized_tests(test_case_node, results_directory),
-							short = nil,
-							errors = {},
+							short = existing_test.short or short_message,
+							errors = (#existing_test.errors > 0 and existing_test.errors) or (error and { error } or {}),
 						}
 					end
 
@@ -296,21 +317,29 @@ return function(build_specfication, _, tree)
 						path_to_file = nil
 					end
 
-					local failure_node = get_failure_node(test_case_node)
 					local status = failure_node == nil and STATUS_PASSED or STATUS_FAILED
-					local short_message = failure_node and extract_message_and_stack_trace(failure_node) or nil
-					local error = failure_node and parse_error_from_failure_xml(failure_node, test_case_node)
+					local short_message, error = get_error_details(failure_node, test_case_node)
 					local result = {
 						status = status,
 						output = path_to_file,
 						short = short_message,
-						errors = { error },
+						errors = error and { error } or {},
 					}
 					results[matched_position.id] = result
+				elseif failure_node ~= nil then
+					local classname = (test_case_node._attr or {}).classname or "<unknown class>"
+					local name = (test_case_node._attr or {}).name or "<unknown test>"
+					logger.debug(function()
+						return "Could not match failed test case to neotest position: " .. classname .. "#" .. name
+					end)
 				end
 			end
 		end
 	end
+
+	logger.debug(function()
+		return "Collected " .. vim.tbl_count(results) .. " test result(s)"
+	end)
 
 	return results
 end
